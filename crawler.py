@@ -135,13 +135,14 @@ def extract_content(html, cfg):
     return f"TITLE: {title}\n{text}\nDATA: {extra_text}"
 
 
-def fetch_sitemap_urls(sitemap_url, cfg):
-    """从 sitemap.xml 发现全部页面 URL."""
+def fetch_sitemap_urls(sitemap_url, cfg, exclude=None):
+    """从 sitemap.xml 发现全部页面 URL. exclude 为需过滤的子串列表."""
     r = fetch_html(sitemap_url, cfg)
     soup = BeautifulSoup(r.text, "xml")
     urls = [loc.get_text(strip=True) for loc in soup.find_all("loc")]
+    exclude = exclude or []
     return [u for u in urls if u and not any(
-        s in u.lower() for s in cfg.get("sitemap_exclude", []))]
+        s in u.lower() for s in exclude)]
 
 
 def content_hash(content):

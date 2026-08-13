@@ -110,7 +110,8 @@ def run_once(cfg, storage, report_file=None):
         title = target.get("title", url)
         if target.get("sitemap"):
             try:
-                pages = crawler.fetch_sitemap_urls(url, cfg)
+                pages = crawler.fetch_sitemap_urls(
+                    url, cfg, target.get("sitemap_exclude", []))
             except crawler.FetchError as e:
                 log.error("sitemap 抓取失败: %s - %s", title, e)
                 continue
