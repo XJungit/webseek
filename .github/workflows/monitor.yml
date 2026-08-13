@@ -76,6 +76,15 @@ jobs:
             [ -e "$f" ] && git add -f "$f"
           done
           git diff --cached --quiet || {
-            git commit -m "chore: 更新监控状态 $(date -u +%F_%T)"
+            git commit -m "chore: 更新监控状态 [skip ci] $(date -u +%F_%T)"
             git push
           }
+
+      - name: Create failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "监控运行失败 $(date -u +%F)" \
+            --body "本轮监控执行失败, 请查看 Actions 日志: https://github.com/XJungit/webseek/actions"

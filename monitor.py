@@ -136,15 +136,13 @@ def run_once(cfg, storage, report_file=None):
 
 
 def write_report(path, reports):
-    """写入 GitHub Actions 通知报告 (markdown)."""
+    """写入 GitHub Actions 通知报告 (markdown). 云端不存快照, 故不含快照链接."""
     with open(path, "w", encoding="utf-8") as f:
         for title, page_title, url, diff_lines, snapshot in reports:
             f.write(f"## {title}\n")
             if page_title:
                 f.write(f"页面: {page_title}\n")
             f.write(f"URL: {url}\n")
-            if snapshot:
-                f.write(f"快照: {snapshot}\n")
             f.write("```diff\n")
             f.write("\n".join(diff_lines) + "\n")
             f.write("```\n\n")

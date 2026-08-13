@@ -16,22 +16,30 @@
 
 | 方式 | 说明 | 配置 |
 |---|---|---|
-| GitHub Issue + 邮件 | 变化时自动创建 Issue,订阅者可收到邮件 | 无需配置 |
+| GitHub Issue + 邮件 | 变化时自动创建 Issue,Watch 订阅者收到邮件 | **无需配置(默认)** |
 | SMTP 邮件 | 直接发送到指定邮箱,正文含完整 diff | 见下方 Secrets 配置 |
 | 企业微信/钉钉 webhook | 推送消息到群 | config.yaml 填 webhook_url |
 
-## GitHub Actions 自动监控(推荐)
+**推荐(纯云上)**:Watch 仓库 → All activity,即可收到变化邮件,无需任何额外配置。
 
-fork 本仓库后自动生效(无需配置):
+## GitHub Actions 自动监控(默认开启)
+
+fork 本仓库后自动生效,每 10 分钟运行:
 
 ```yaml
 # .github/workflows/monitor.yml
 on:
   schedule:
     - cron: '*/10 * * * *'   # 每 10 分钟
+  workflow_dispatch:          # 也可手动触发
 ```
 
-每次运行:抓取 → 对比哈希 → 有变化则创建 Issue + 提交状态;无变化零提交。
+运行机制:
+- 抓取 → 对比 SHA256 基线
+- **有变化**:创建 Issue(含页面标题 + URL + diff)、提交状态、零额外噪音
+- **无变化**:零提交
+- **运行失败**:自动创建 Issue 通知(你通过 Watch 邮件知晓,无需 SMTP)
+- 状态仅提交 `state.json` + `changes.log`(带 `[skip ci]`,不污染主分支);快照只在本地运行时保留
 
 ### 可选:SMTP 邮件通知(需 GitHub Secrets)
 
