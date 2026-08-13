@@ -33,12 +33,12 @@ def setup_logging():
 
 
 def check_page(url, title, cfg, storage):
-    """抓取并检测变化, 返回是否发生变化."""
+    """抓取并检测变化. 变化时返回 (title, url, diff_lines, snapshot), 否则 None."""
     try:
         resp = crawler.fetch_html(url, cfg)
     except crawler.FetchError as e:
         log.error("抓取失败: %s - %s", title, e)
-        return False
+        return None
 
     content = crawler.extract_content(resp.text, cfg)
     digest = crawler.content_hash(content)
@@ -48,12 +48,12 @@ def check_page(url, title, cfg, storage):
         storage.record_ok(url, digest, content)
         storage.save()
         log.info("首次记录: %s (%d 字符)", title, len(content))
-        return False
+        return None
 
     changed = storage.record_ok(url, digest, content)
     if not changed:
         log.debug("无变化: %s", title)
-        return False
+        return None
 
     storage.save()
 
@@ -70,7 +70,7 @@ def check_page(url, title, cfg, storage):
         log.info("%s", line)
     notify.send_webhook(cfg.get("notify", {}), f"网页变化: {title}", url)
     write_changelog(cfg, url, title, diff_lines, snapshot)
-    return True
+    return (title, url, diff_lines, snapshot)
 
 
 def write_changelog(cfg, url, title, diff_lines, snapshot):
@@ -88,10 +88,10 @@ def write_changelog(cfg, url, title, diff_lines, snapshot):
         f.write("```\n\n")
 
 
-def run_once(cfg, storage):
-    notify_cfg = cfg.get("notify", {})
+def run_once(cfg, storage, report_file=None):
     changes = 0
     seen = 0
+    reports = []
     for target in cfg.get("targets", []):
         url = target["url"]
         title = target.get("title", url)
@@ -104,22 +104,42 @@ def run_once(cfg, storage):
             seen += len(pages)
             log.info("从 sitemap 发现 %d 个页面: %s", len(pages), title)
             for page in sorted(pages):
-                if check_page(page, f"{title} :: {page}", cfg, storage):
+                r = check_page(page, f"{title} :: {page}", cfg, storage)
+                if r:
                     changes += 1
+                    reports.append(r)
         else:
             seen += 1
-            if check_page(url, title, cfg, storage):
+            r = check_page(url, title, cfg, storage)
+            if r:
                 changes += 1
+                reports.append(r)
     if changes:
         log.info("本轮完成: 共 %d 处变化 (监控 %d 个页面, 详见 changes.log)", changes, seen)
+        if report_file:
+            write_report(report_file, reports)
     else:
         log.info("本轮完成: 无变化 (监控 %d 个页面)", seen)
+
+
+def write_report(path, reports):
+    """写入 GitHub Actions 通知报告 (markdown)."""
+    with open(path, "w", encoding="utf-8") as f:
+        for title, url, diff_lines, snapshot in reports:
+            f.write(f"## {title}\n")
+            f.write(f"URL: {url}\n")
+            if snapshot:
+                f.write(f"快照: {snapshot}\n")
+            f.write("```diff\n")
+            f.write("\n".join(diff_lines) + "\n")
+            f.write("```\n\n")
 
 
 def main():
     ap = argparse.ArgumentParser(description="webseek 网页变化监控")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--once", action="store_true", help="只运行一轮后退出")
+    ap.add_argument("--report-file", help="变化时写入 markdown 通知报告(GitHub Actions 用)")
     args = ap.parse_args()
 
     setup_logging()
@@ -137,7 +157,7 @@ def main():
                       cfg.get("snapshot_dir", "snapshots"))
 
     if args.once:
-        run_once(cfg, storage)
+        run_once(cfg, storage, report_file=args.report_file)
         return
 
     interval = cfg.get("interval_seconds", 600)
