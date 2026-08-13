@@ -1,0 +1,21 @@
+# webseek 配置
+interval_seconds: 600          # 轮询间隔, 默认 10 分钟
+user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) webseek/1.0"
+timeout_seconds: 30
+retries: 3
+ignore_blocks: true            # 忽略 script/style/nav/footer/noscript 等噪声
+state_file: "state.json"       # 状态(哈希)存储文件
+snapshot_dir: "snapshots"      # 变化快照保存目录
+changelog_file: "changes.log"  # 变化历史记录文件
+
+targets:
+  - url: "https://www.deepseek.com/"
+    title: "DeepSeek 官网主页"
+  - url: "https://api-docs.deepseek.com/zh-cn/sitemap.xml"
+    title: "DeepSeek API 文档-中文版(整站)"
+    sitemap: true              # 从 sitemap 自动发现全部文档页面
+
+# 通知: 留空则不启用。支持任意 POST JSON 的 webhook (企业微信/钉钉/Slack 机器人等)
+notify:
+  webhook_url: ""              # 例如企业微信机器人: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
+  webhook_type: "generic"      # generic | wecom | dingtalk

@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.opencode/
+state.json
+snapshots/
+changes.log
