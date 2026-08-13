@@ -2,9 +2,8 @@ name: webseek-monitor
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
-    - cron: '2,12,22,32,42,52 * * * *'
-    - cron: '7,17,27,37,47,57 * * * *'
+    - cron: '*/10 * * * *'          # 主: 每10分钟
+    - cron: '15,35,55 * * * *'      # 冗余: 填补若某轮被 GitHub 跳过, 最坏间隔≤15分钟
   workflow_dispatch:
 
 permissions:
