@@ -14,8 +14,9 @@ targets:
   - url: "https://api-docs.deepseek.com/zh-cn/sitemap.xml"
     title: "DeepSeek API 文档-中文版"
     sitemap: true              # 从 sitemap 自动发现全部文档页面
-    sitemap_exclude:           # 排除非文档内容(产品新闻公告)
-      - "/news/"
+    sitemap_exclude:           # 排除非文档内容
+      - "/news/"                # 产品新闻公告
+      - "/faq"                  # 常见问题(外部静态页, sitemap 内旧页也排除)
 
 # 通知: 留空则不启用。支持任意 POST JSON 的 webhook (企业微信/钉钉/Slack 机器人等)
 notify:
