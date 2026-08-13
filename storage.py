@@ -45,10 +45,10 @@ class Storage:
         if not changed:
             return None
         os.makedirs(self.snapshot_dir, exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         safe = url.replace("https://", "").replace("http://", "")
         safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in safe)[:80]
-        path = os.path.join(self.snapshot_dir, f"{ts}_{safe}.txt")
+        path = os.path.join(self.snapshot_dir, f"{safe}.txt")
         with open(path, "w", encoding="utf-8") as f:
             f.write(f"URL: {url}\nTIME: {ts}\n\n{content}")
         return path

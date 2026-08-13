@@ -48,7 +48,7 @@ on:
 - **有变化**:创建 Issue(含页面标题 + URL + diff)、提交状态
 - **无变化**:零提交
 - **运行失败**:自动创建 Issue(通过 Watch 邮件告知,无需 SMTP)
-- 状态仅提交 `state.json` + `changes.log`(带 `[skip ci]`,不污染主分支);快照只在本地运行时保留
+- 状态仅提交 `state.json` + `changes.log`(带 `[skip ci]`,不污染主分支);快照(`snapshots/<页面>.txt`)每个变化页面一份最新存档,随变化更新
 
 **fork/clone 到自己账号后启用**:
 1. 在自己仓库 **Actions → webseek-monitor → Enable**
