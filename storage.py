@@ -57,6 +57,19 @@ class Storage:
         entry = self.data.get(url)
         return entry.get("content") if entry else None
 
+    def record_fallback(self, url, note):
+        """记录页面失效(回退到首页), 用哨兵哈希避免反复告警; 页面恢复时算作变化."""
+        now = time.time()
+        entry = self.data.setdefault(url, {})
+        sentinel = "FALLBACK:" + note
+        changed = entry.get("hash") != sentinel
+        if changed:
+            entry["hash"] = sentinel
+            entry["last_change"] = now
+        entry["last_seen"] = now
+        entry["fallback"] = True
+        return changed
+
     @staticmethod
     def fmt_time(ts):
         tz = timezone(timedelta(hours=8))

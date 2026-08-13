@@ -41,6 +41,16 @@ def check_page(url, title, cfg, storage):
         return None
 
     content = crawler.extract_content(resp.text, cfg)
+
+    # 失效页检测: 非首页URL却抓到首页内容 -> 页面已删除/重定向, 跳过diff只记失效
+    if crawler.is_homepage_fallback(content, url):
+        changed = storage.record_fallback(url, resp.url)
+        storage.save()
+        if changed:
+            log.warning("页面可能已失效/重定向到首页(已跳过diff): %s -> %s",
+                        title, resp.url)
+        return None
+
     digest = crawler.content_hash(content)
     old_content = storage.old_content(url)
 

@@ -147,3 +147,20 @@ def fetch_sitemap_urls(sitemap_url, cfg, exclude=None):
 
 def content_hash(content):
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+# 首页特征标题: 非首页URL却抓到这些 -> 页面已失效/回退到首页
+HOMEPAGE_TITLES = ("Your First API Call", "首次调用 API", "DeepSeek | 深度求索")
+_HOMEPAGE_URLS = (
+    "https://api-docs.deepseek.com",
+    "https://api-docs.deepseek.com/zh-cn",
+    "https://www.deepseek.com",
+)
+
+
+def is_homepage_fallback(content, url):
+    """非首页URL却抓到首页内容 -> 页面失效/重定向到首页(应跳过diff)."""
+    if (url or "").rstrip("/") in _HOMEPAGE_URLS:
+        return False
+    first = content.splitlines()[0] if content else ""
+    return any(t in first for t in HOMEPAGE_TITLES)
