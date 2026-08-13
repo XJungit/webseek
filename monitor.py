@@ -33,7 +33,7 @@ def setup_logging():
 
 
 def check_page(url, title, cfg, storage):
-    """抓取并检测变化. 变化时返回 (title, url, diff_lines, snapshot), 否则 None."""
+    """抓取并检测变化. 变化时返回 (title, page_title, url, diff_lines, snapshot), 否则 None."""
     try:
         resp = crawler.fetch_html(url, cfg)
     except crawler.FetchError as e:
@@ -62,26 +62,37 @@ def check_page(url, title, cfg, storage):
         fromfile="旧", tofile="新", lineterm="", n=2)
         if l.startswith(("+", "-", "@"))]
 
+    page_title = _page_title(content)
+
     snapshot = storage.save_snapshot(url, content, True)
     log.info("===== 检测到变化: %s =====", title)
+    log.info("页面: %s", page_title)
     log.info("URL: %s", url)
     log.info("快照已保存: %s", snapshot)
     for line in diff_lines:
         log.info("%s", line)
     notify.send_webhook(cfg.get("notify", {}), f"网页变化: {title}", url)
-    mail_text = f"{url}\n\n" + "\n".join(diff_lines)
+    mail_text = f"{title}\n{page_title}\n{url}\n\n" + "\n".join(diff_lines)
     notify.send_email(cfg.get("notify", {}), f"网页变化: {title}", mail_text)
-    write_changelog(cfg, url, title, diff_lines, snapshot)
-    return (title, url, diff_lines, snapshot)
+    write_changelog(cfg, url, title, page_title, diff_lines, snapshot)
+    return (title, page_title, url, diff_lines, snapshot)
 
 
-def write_changelog(cfg, url, title, diff_lines, snapshot):
+def _page_title(content):
+    """从提取内容解析页面真实标题 (TITLE: xxx)."""
+    line = content.splitlines()[0] if content else ""
+    return line[len("TITLE: "):].strip() if line.startswith("TITLE: ") else ""
+
+
+def write_changelog(cfg, url, title, page_title, diff_lines, snapshot):
     """追加写入变化历史 changes.log, 方便事后查看."""
     path = cfg.get("changelog_file", "changes.log")
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(path, "a", encoding="utf-8") as f:
         f.write(f"## {ts} | {title}\n")
+        if page_title:
+            f.write(f"页面: {page_title}\n")
         f.write(f"URL: {url}\n")
         if snapshot:
             f.write(f"快照: {snapshot}\n")
@@ -127,8 +138,10 @@ def run_once(cfg, storage, report_file=None):
 def write_report(path, reports):
     """写入 GitHub Actions 通知报告 (markdown)."""
     with open(path, "w", encoding="utf-8") as f:
-        for title, url, diff_lines, snapshot in reports:
+        for title, page_title, url, diff_lines, snapshot in reports:
             f.write(f"## {title}\n")
+            if page_title:
+                f.write(f"页面: {page_title}\n")
             f.write(f"URL: {url}\n")
             if snapshot:
                 f.write(f"快照: {snapshot}\n")
