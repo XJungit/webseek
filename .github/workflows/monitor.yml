@@ -72,7 +72,7 @@ jobs:
         run: |
           git config user.name "webseek-bot"
           git config user.email "webseek-bot@users.noreply.github.com"
-          for f in state.json changes.log snapshots; do
+          for f in state.json changes.log; do
             [ -e "$f" ] && git add -f "$f"
           done
           git diff --cached --quiet || {

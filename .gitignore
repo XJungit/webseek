@@ -4,3 +4,5 @@ __pycache__/
 state.json
 snapshots/
 changes.log
+
+# GitHub Actions 仅持久化 state.json + changes.log, 快照只保留在本地
