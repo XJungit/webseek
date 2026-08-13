@@ -8,3 +8,13 @@ URL: https://www.deepseek.com/
 -SIMULATED-V4.5-RELEASE-ANNOUNCEMENT
 ```
 
+## 2026-08-13 11:49:27 | DeepSeek 官网主页
+URL: https://www.deepseek.com/
+快照: snapshots/20260813_114927_www.deepseek.com_.txt
+```diff
+--- 旧
++++ 新
+@@ -2,3 +2,2 @@
+-EMAIL-NOTIFICATION-TEST-2026
+```
+
