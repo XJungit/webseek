@@ -19,3 +19,12 @@ targets:
 notify:
   webhook_url: ""              # 例如企业微信机器人: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
   webhook_type: "generic"      # generic | wecom | dingtalk
+  # SMTP 邮件通知。凭据建议用环境变量 (MAIL_SMTP_HOST/PORT/USER/PASSWORD/FROM/TO),
+  # 避免写入公开仓库。例如 QQ 邮箱: 设置->账户->开启 SMTP 服务 获取授权码。
+  mail:
+    smtp_host: ""
+    smtp_port: 465
+    smtp_user: ""
+    smtp_password: ""
+    from: ""
+    to: ""

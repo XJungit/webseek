@@ -69,6 +69,8 @@ def check_page(url, title, cfg, storage):
     for line in diff_lines:
         log.info("%s", line)
     notify.send_webhook(cfg.get("notify", {}), f"网页变化: {title}", url)
+    mail_text = f"{url}\n\n" + "\n".join(diff_lines)
+    notify.send_email(cfg.get("notify", {}), f"网页变化: {title}", mail_text)
     write_changelog(cfg, url, title, diff_lines, snapshot)
     return (title, url, diff_lines, snapshot)
 
