@@ -43,9 +43,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh issue create \
-            --title "网页变化: $(head -1 .report.md | sed 's/^## //')" \
-            --body-file .report.md
+          COUNT=$(grep -c '^## ' .report.md)
+          TITLE=$(head -1 .report.md | sed 's/^## //')
+          if [ "$COUNT" -gt 1 ]; then TITLE="$TITLE 等 ${COUNT} 处变化"; fi
+          gh issue create --title "网页变化: $TITLE" --body-file .report.md
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          MAIL_SMTP_HOST: ${{ secrets.MAIL_SMTP_HOST }}
+          MAIL_SMTP_PORT: ${{ secrets.MAIL_SMTP_PORT }}
+          MAIL_SMTP_USER: ${{ secrets.MAIL_SMTP_USER }}
+          MAIL_SMTP_PASSWORD: ${{ secrets.MAIL_SMTP_PASSWORD }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+        run: |
+          python -c "
+          import sys; sys.path.insert(0, '.')
+          import yaml, notify
+          cfg = yaml.safe_load(open('config.yaml', encoding='utf-8')) or {}
+          notify.send_email(cfg.get('notify', {}),
+              'webseek 监控运行失败',
+              '本轮监控执行失败, 请查看: https://github.com/XJungit/webseek/actions')
+          "
 
       - name: Commit state
         if: always()
