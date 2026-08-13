@@ -14,36 +14,51 @@
 
 ## 你如何收到通知
 
-| 方式 | 说明 | 配置 |
-|---|---|---|
-| GitHub Issue + 邮件 | 变化时自动创建 Issue,Watch 订阅者收到邮件 | **无需配置(默认)** |
-| SMTP 邮件 | 直接发送到指定邮箱,正文含完整 diff | 见下方 Secrets 配置 |
-| 企业微信/钉钉 webhook | 推送消息到群 | config.yaml 填 webhook_url |
+| 方式 | 本地运行 | GitHub Actions | 配置 |
+|---|---|---|---|
+| 控制台 + changes.log + 快照 | ✅ | — | 无需配置 |
+| GitHub Issue + Watch 邮件 | — | ✅ | Watch 仓库(默认) |
+| SMTP 邮件 | ✅ | ✅ | 配置 Secrets/环境变量 |
+| 企业微信/钉钉 webhook | ✅ | ✅ | config.yaml 填 webhook_url |
 
-**推荐(纯云上)**:Watch 仓库 → All activity,即可收到变化邮件,无需任何额外配置。
+## 本地运行
 
-## GitHub Actions 自动监控(默认开启)
+```bash
+pip install -r requirements.txt
+python monitor.py --once     # 单轮抓取, 首次自动建立基线
+python monitor.py            # 持续轮询(默认每 10 分钟)
+```
 
-fork 本仓库后自动生效,每 10 分钟运行:
+- 变化时:控制台输出 diff + 追加 `changes.log` + 保存 `snapshots/` 快照
+- 想本地也收邮件/webhook:配置 `notify`(见下),本地读取环境变量或 config.yaml
+
+## GitHub Actions 自动监控(可选, 推荐云上方案)
+
+仓库内置 `.github/workflows/monitor.yml`,**每 10 分钟**自动运行,无需本地服务器:
 
 ```yaml
-# .github/workflows/monitor.yml
 on:
   schedule:
-    - cron: '*/10 * * * *'   # 每 10 分钟
+    - cron: '*/10 * * * *'
   workflow_dispatch:          # 也可手动触发
 ```
 
 运行机制:
 - 抓取 → 对比 SHA256 基线
-- **有变化**:创建 Issue(含页面标题 + URL + diff)、提交状态、零额外噪音
+- **有变化**:创建 Issue(含页面标题 + URL + diff)、提交状态
 - **无变化**:零提交
-- **运行失败**:自动创建 Issue 通知(你通过 Watch 邮件知晓,无需 SMTP)
+- **运行失败**:自动创建 Issue(通过 Watch 邮件告知,无需 SMTP)
 - 状态仅提交 `state.json` + `changes.log`(带 `[skip ci]`,不污染主分支);快照只在本地运行时保留
 
-### 可选:SMTP 邮件通知(需 GitHub Secrets)
+**fork/clone 到自己账号后启用**:
+1. 在自己仓库 **Actions → webseek-monitor → Enable**
+2. Watch → All activity 即可收到变化邮件
+3. 想收 SMTP 邮件:Settings → Secrets 添加 `MAIL_*`
 
-在仓库 **Settings → Secrets and variables → Actions** 添加:
+### SMTP 邮件通知配置
+
+本地:在 `config.yaml` 的 `notify.mail` 填写,或设环境变量 `MAIL_SMTP_HOST` 等。
+Actions:在仓库 **Settings → Secrets and variables → Actions** 添加:
 
 | Secret | 值 |
 |---|---|
