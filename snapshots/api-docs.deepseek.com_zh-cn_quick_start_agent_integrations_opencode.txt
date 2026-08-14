@@ -1,0 +1,6 @@
+URL: https://api-docs.deepseek.com/zh-cn/quick_start/agent_integrations/opencode
+TIME: 2026-08-14 06:02:05
+
+TITLE: 接入 OpenCode | DeepSeek API Docs
+本页总览 接入 OpenCode OpenCode 是一个开源 AI 编程助手，提供终端、网页等运行形式。 从现有安装中迁移到 DeepSeek ​ 执行 opencode upgrade 命令，将 opencode 升级至最新版本（>=v1.14.24） 执行 opencode 命令，启动 OpenCode 输入框中输入 /connect ，然后输入 deepseek 并选择供应商 填入 DeepSeek API Key 选择 DeepSeek-V4-Pro 模型 从零安装 OpenCode ​ 1. 安装 OpenCode ​ 前往官方下载页面安装或升级： OpenCode 下载 为避免兼容性问题，强烈建议您将 OpenCode 升级到最新版本，确保版本号 >= v1.14.24。 2. 运行与配置 ​ 执行 opencode 命令 输入框中输入 /connect ，然后输入 deepseek 并选择供应商 填入 DeepSeek API Key 选择 DeepSeek-V4-Pro 模型 从现有安装中迁移到 DeepSeek 从零安装 OpenCode
+DATA: 
