@@ -66,6 +66,10 @@ class Storage:
         if changed:
             entry["hash"] = sentinel
             entry["last_change"] = now
+            # 清掉旧正文: 否则页面恢复时 old_content 仍是失效前的正文, 与恢复后正文
+            # 逐字相同导致 diff 为空, 而 hash 从哨兵变回真实摘要被判为"变化",
+            # 产生空 diff 的幽灵告警. 清掉后恢复按"首次记录"静默建基线.
+            entry.pop("content", None)
         entry["last_seen"] = now
         entry["fallback"] = True
         return changed
