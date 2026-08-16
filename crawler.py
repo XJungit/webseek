@@ -69,8 +69,29 @@ def _extract_json_strings(text):
 
 _NOISE = re.compile(
     r"static/|\.js\b|\.css\b|\.png\b|\.jpg\b|\.svg\b|\.json\b|%5B|%5D|"
-    r"\$[LDdbe]|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}|^[0-9a-f]{16,}$"
+    r"\$[LDdbe]|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}|^[0-9a-f]{16,}$|"
+    # 以下为易变 SSR/RSC 噪声: 随机会话 ID / 埋点令牌 / 模板类, 每次请求都不同
+    r"[A-Za-z0-9_]{14,}"          # 随机 ID/哈希 (如 ruQKed94s2fsWmYzhepsH, gaW0_wU5RdVWkTUwK558U)
+    r"|font/woff2|width=device-width|This page could not be found|"
+    r"next-error|__className|ToastSetup|DataFinderBase|ApmReport|next_f\.push|"
+    r"\[|\]|%r"                    # RSC 分块标记 (I[67595,[) 与 %r 等模板占位
 )
+
+
+def _scrub_extra(text):
+    """剔除 SSR 数据中的易变噪声 token, 避免埋点/会话令牌导致误报.
+
+    __NEXT_DATA__ / next_f.push 提取出的字符串未经 _NOISE 过滤, 其中常含每次
+    请求都变的随机会话 ID (如 ruQKed94s2fsWmYzhepsH) 与 RSC 分块标记, 直接进
+    哈希会让几乎每个页面每轮都"变化". 这里按空白切 token, 命中 _NOISE 的整体丢弃.
+    """
+    if not text:
+        return ""
+    out = []
+    for tok in re.split(r"\s+", text):
+        if not _NOISE.search(tok):
+            out.append(tok)
+    return " ".join(out)
 
 
 def _keep_string(inner):
@@ -131,7 +152,7 @@ def extract_content(html, cfg):
     main = soup.select_one("main") or soup.select_one("article") or soup.body or soup
     text = main.get_text(" ", strip=True)
     text = re.sub(r"\s+", " ", text)
-    extra_text = re.sub(r"\s+", " ", " ".join(extra))
+    extra_text = _scrub_extra(re.sub(r"\s+", " ", " ".join(extra)))
     return f"TITLE: {title}\n{text}\nDATA: {extra_text}"
 
 

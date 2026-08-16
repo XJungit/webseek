@@ -2,8 +2,7 @@ name: webseek-monitor
 
 on:
   schedule:
-    - cron: '*/10 * * * *'          # 主: 每10分钟
-    - cron: '15,35,55 * * * *'      # 冗余: 填补若某轮被 GitHub 跳过, 最坏间隔≤15分钟
+    - cron: '*/15 * * * *'          # 每 15 分钟一轮 (降频, 减少 GitHub API 限流)
   workflow_dispatch:
 
 permissions:
@@ -41,6 +40,7 @@ jobs:
 
       - name: Create notification issue
         if: hashFiles('.report.md') != ''
+        continue-on-error: true        # 建 Issue 失败(如 API 限流)不拖红整轮
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -70,9 +70,11 @@ jobs:
 
       - name: Commit state
         if: always()
+        continue-on-error: true        # 推送失败不拖红整轮, 避免失败 Issue 雪崩
         run: |
           git config user.name "webseek-bot"
           git config user.email "webseek-bot@users.noreply.github.com"
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true   # 先同步远端, 避免非快进拒收
           for f in state.json changes.log snapshots; do
             [ -e "$f" ] && git add -f "$f"
           done
