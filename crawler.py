@@ -71,7 +71,8 @@ _NOISE = re.compile(
     r"static/|\.js\b|\.css\b|\.png\b|\.jpg\b|\.svg\b|\.json\b|%5B|%5D|"
     r"\$[LDdbe]|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}|^[0-9a-f]{16,}$|"
     # 以下为易变 SSR/RSC 噪声: 随机会话 ID / 埋点令牌 / 模板类, 每次请求都不同
-    r"[A-Za-z0-9_]{14,}"          # 随机 ID/哈希 (如 ruQKed94s2fsWmYzhepsH, gaW0_wU5RdVWkTUwK558U)
+    r"[A-Za-z0-9_-]{14,}"         # 随机 ID/哈希 (ruQKed94s2fsWmYzhepsH, gaW0_wU5RdVWkTUwK558U,
+                                  # Qn_4kyupWIM-qRJH5Zwpn; 含 -/_ 分隔的长令牌也一起丢)
     r"|font/woff2|width=device-width|This page could not be found|"
     r"next-error|__className|ToastSetup|DataFinderBase|ApmReport|next_f\.push|"
     r"\[|\]|%r"                    # RSC 分块标记 (I[67595,[) 与 %r 等模板占位
@@ -154,6 +155,19 @@ def extract_content(html, cfg):
     text = re.sub(r"\s+", " ", text)
     extra_text = _scrub_extra(re.sub(r"\s+", " ", " ".join(extra)))
     return f"TITLE: {title}\n{text}\nDATA: {extra_text}"
+
+
+def stable_part(content):
+    """变化检测用的稳定部分: 标题 + 可见正文, 排除易变的 SSR DATA 段.
+
+    DATA 段(埋点/分片 id/翻译 key 等)每轮都可能杂散变化且无业务价值
+    (如官网主页的 Qn_4kyupWIM-qRJH5Zwpn), 不再参与哈希与 diff;
+    仍会存入快照/changes.log 供追查.
+    """
+    if not content:
+        return ""
+    idx = content.find("\nDATA: ")
+    return content[:idx] if idx != -1 else content
 
 
 def fetch_sitemap_urls(sitemap_url, cfg, exclude=None):
