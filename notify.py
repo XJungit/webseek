@@ -44,16 +44,28 @@ def _mail_conf(cfg):
     }
 
 
-def send_email(cfg, title, text):
-    """SMTP 发送邮件通知. 未配置 SMTP 时静默跳过."""
+def send_email(cfg, title, text, html=None):
+    """SMTP 发送邮件通知. 未配置 SMTP 时静默跳过.
+
+    text 为纯文本版 (兼容性兜底), html 为排版版.
+    支持多收件人: MAIL_TO / to 可用逗号分隔多个地址.
+    """
     conf = _mail_conf(cfg)
     if not (conf["host"] and conf["user"] and conf["password"] and conf["to"]):
         return
     sender = conf["from"] or conf["user"]
-    msg = MIMEText(text, "plain", "utf-8")
+    recipients = [a.strip() for a in conf["to"].replace(";", ",").split(",")
+                  if a.strip()]
+    if not recipients:
+        return
+    from email.mime.multipart import MIMEMultipart
+    msg = MIMEMultipart("alternative")
     msg["Subject"] = str(Header(title, "utf-8"))
     msg["From"] = sender
-    msg["To"] = conf["to"]
+    msg["To"] = ", ".join(recipients)
+    msg.attach(MIMEText(text, "plain", "utf-8"))
+    if html:
+        msg.attach(MIMEText(html, "html", "utf-8"))
     try:
         if conf["port"] == 465:
             server = smtplib.SMTP_SSL(conf["host"], conf["port"], timeout=20)
@@ -62,7 +74,7 @@ def send_email(cfg, title, text):
             server.starttls()
         with server:
             server.login(conf["user"], conf["password"])
-            server.sendmail(sender, [conf["to"]], msg.as_string())
+            server.sendmail(sender, recipients, msg.as_string())
         log.info("邮件已发送: %s", title)
     except smtplib.SMTPException as e:
         log.warning("邮件发送失败: %s", e)
