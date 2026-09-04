@@ -10,6 +10,7 @@ import argparse
 import difflib
 import logging
 import os
+import re
 import sys
 import time
 from datetime import datetime
@@ -51,29 +52,58 @@ def check_page(url, title, cfg, storage):
                         title, resp.url)
         return None
 
-    digest = crawler.content_hash(content)
+    digest = crawler.content_hash(crawler.stable_part(content))
     old_content = storage.old_content(url)
 
-    if old_content is None:
+    # 兼容老基线: 老 state.json 里 content 是"旧版抓取格式"(DATA 含噪声),
+    # 直接用稳定部分比对即可判断真变化, 无需整库重置; 若稳定部分已被更新
+    # (存储的是新格式), 则直接退化为 digest 比对.
+    if old_content is not None:
+        old_stable = crawler.stable_part(old_content)
+        new_stable = crawler.stable_part(content)
+        if _LEGACY_STABLE_RE.search(old_stable):
+            if old_stable == new_stable:
+                log.debug("无变化: %s", title)
+                return None
+        else:
+            changed = storage.record_ok(url, digest, content)
+            if not changed:
+                log.debug("无变化: %s", title)
+                return None
+            diff_lines = [l for l in difflib.unified_diff(
+                old_stable.splitlines(), new_stable.splitlines(),
+                fromfile="旧", tofile="新", lineterm="", n=2)
+                if l.startswith(("+", "-", "@"))]
+            if not diff_lines:
+                log.info("仅 DATA 段漂移, 误报过滤: %s", title)
+                return None
+            storage.save()
+            return _finish_change(cfg, storage, url, title, content,
+                                  diff_lines)
+    else:
         storage.record_ok(url, digest, content)
         storage.save()
         log.info("首次记录: %s (%d 字符)", title, len(content))
         return None
 
-    changed = storage.record_ok(url, digest, content)
-    if not changed:
-        log.debug("无变化: %s", title)
-        return None
-
+    # --- 老基线分支: 稳定部分已变化, 落盘新基线后输出 ---
+    # (理论上此时 diff_lines 必非空, 兜底防空 diff 污染报告/邮件)
+    storage.record_ok(url, digest, content)
     storage.save()
 
     diff_lines = [l for l in difflib.unified_diff(
-        old_content.splitlines(), content.splitlines(),
+        old_stable.splitlines(), new_stable.splitlines(),
         fromfile="旧", tofile="新", lineterm="", n=2)
         if l.startswith(("+", "-", "@"))]
+    if not diff_lines:
+        log.info("仅 DATA 段漂移, 误报过滤: %s", title)
+        return None
+    return _finish_change(cfg, storage, url, title, content, diff_lines)
 
+
+def _finish_change(cfg, storage, url, title, content, diff_lines):
+    """变化已确认: 打快照、记日志、发通知, 返回报告元组."""
     page_title = _page_title(content)
-
     snapshot = storage.save_snapshot(url, content, True)
     log.info("===== 检测到变化: %s =====", title)
     log.info("页面: %s", page_title)
@@ -82,10 +112,84 @@ def check_page(url, title, cfg, storage):
     for line in diff_lines:
         log.info("%s", line)
     notify.send_webhook(cfg.get("notify", {}), f"网页变化: {title}", url)
-    mail_text = f"{title}\n{page_title}\n{url}\n\n" + "\n".join(diff_lines)
-    notify.send_email(cfg.get("notify", {}), f"网页变化: {title}", mail_text)
+    mail_text, mail_html = build_mail(title, page_title, url, diff_lines)
+    notify.send_email(cfg.get("notify", {}), f"网页变化: {title}",
+                      mail_text, mail_html)
     write_changelog(cfg, url, title, page_title, diff_lines, snapshot)
     return (title, page_title, url, diff_lines, snapshot)
+
+
+# 老抓取格式的指纹: 可见正文里混入了 RSC 内层转义串/模板占位
+# (如 \" \\n 、heroJoinTitle1、token 72), 新版 extract_content 剥离了它们.
+_LEGACY_STABLE_RE = re.compile(
+    r'\\" ?\\n|heroJoinTitle\d|heroCta\d|platformRotating\d|platformFeature\d|'
+    r"token \d|notFoundLine\d|newsPageTitle\d|transparencyFooterCta\d|"
+    r"NextPageVisitSetup|NextPageVisitRecorder|RememberLocale"
+)
+
+
+MAIL_MAX_LINES = 30    # 邮件正文最多展示的 diff 行数, 超出截断并提示去 Issue 看全文
+MAIL_MAX_WIDTH = 160   # 邮件中每行最多字符, 超长截断 (DATA 单行常达数千字)
+
+
+def _clip_line(line, width=MAIL_MAX_WIDTH):
+    line = (line or "").rstrip()
+    return line if len(line) <= width else line[:width] + "…"
+
+
+def build_mail(title, page_title, url, diff_lines):
+    """组装邮件正文, 返回 (纯文本版, HTML 版).
+
+    只展示稳定部分的 diff, 每行截断、总行数封顶, 避免手机邮箱里出现
+    一屏都划不完的超长单行; 全文仍保留在 GitHub Issue / changes.log.
+    """
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    head = [f"标题: {title}"]
+    if page_title:
+        head.append(f"页面: {page_title}")
+    head.append(f"链接: {url}")
+    head.append(f"时间: {ts}")
+
+    usable = [l for l in diff_lines if l and not l.startswith("@@")]
+    shown = usable[:MAIL_MAX_LINES]
+    omitted = len(usable) - len(shown)
+
+    text = list(head) + [""]
+    if not usable:
+        text.append("（无实质内容差异）")
+    else:
+        text.append("变化详情:")
+        text.extend(_clip_line(l) for l in shown)
+        if omitted:
+            text.append(f"…（已省略其余 {omitted} 行，完整 diff 见 GitHub Issue / changes.log）")
+
+    import html as _html
+    rows = []
+    for l in shown:
+        cls = "add" if l.startswith("+") else "del" if l.startswith("-") else "ctx"
+        rows.append(f'<div class="{cls}">{_html.escape(_clip_line(l))}</div>')
+    if omitted:
+        rows.append(f'<div class="more">… 已省略其余 {omitted} 行，'
+                    "完整 diff 见 GitHub Issue / changes.log</div>")
+    if not rows:
+        rows.append('<div class="more">（无实质内容差异）</div>')
+    html_body = (
+        '<html><body style="font-family:-apple-system,Segoe UI,Roboto,'
+        'PingFang SC,Microsoft YaHei,sans-serif;font-size:14px;color:#24292f">'
+        f"<p><b>标题:</b> {_html.escape(title)}<br>"
+        + (f"<b>页面:</b> {_html.escape(page_title)}<br>" if page_title else "")
+        + f'<b>链接:</b> <a href="{_html.escape(url)}">{_html.escape(url)}</a><br>'
+        + f"<b>时间:</b> {_html.escape(ts)}</p>"
+        + '<p><b>变化详情:</b></p>'
+        + '<div style="font-family:Consolas,Menlo,monospace;font-size:13px">'
+        + "".join(rows) + "</div>"
+        + "<style>.add{background:#e6ffed;white-space:pre-wrap;word-break:break-all}"
+        ".del{background:#ffeef0;white-space:pre-wrap;word-break:break-all}"
+        ".ctx{white-space:pre-wrap;word-break:break-all}"
+        ".more{color:#57606a;margin-top:6px}</style>"
+        "</body></html>"
+    )
+    return "\n".join(text), html_body
 
 
 def _page_title(content):
@@ -163,7 +267,6 @@ def main():
     ap = argparse.ArgumentParser(description="webseek 网页变化监控")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--once", action="store_true", help="只运行一轮后退出")
-    ap.add_argument("--report-file", help="变化时写入 markdown 通知报告(GitHub Actions 用)")
     args = ap.parse_args()
 
     setup_logging()
