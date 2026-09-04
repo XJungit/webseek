@@ -267,6 +267,7 @@ def main():
     ap = argparse.ArgumentParser(description="webseek 网页变化监控")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--once", action="store_true", help="只运行一轮后退出")
+    ap.add_argument("--report-file", help="变化时写入 markdown 通知报告(GitHub Actions 用)")
     args = ap.parse_args()
 
     setup_logging()
