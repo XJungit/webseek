@@ -1,0 +1,6 @@
+URL: https://api-docs.deepseek.com/zh-cn/api_samples/chat_curl
+TIME: 2026-09-10 09:06:56
+
+TITLE: chat_curl | DeepSeek API Docs
+curl https://api.deepseek.com/chat/completions \ -H "Content-Type: application/json" \ -H "Authorization: Bearer ${DEEPSEEK_API_KEY}" \ -d '{ "model": "deepseek-flash", "messages": [ {"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Hello!"} ], "thinking": {"type": "enabled"}, "reasoning_effort": "high", "stream": false }'
+DATA: 
