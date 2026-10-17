@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import time
+import unicodedata
 from datetime import datetime
 
 import yaml
@@ -507,8 +508,35 @@ def run_once(cfg, storage, report_file=None):
     return failed
 
 
-REPORT_WRAP = 100       # 报告里普通文本行的折行宽度(手机端会自然换行, 留宽些)
-REPORT_CODE_WRAP = 50   # 代码块是等宽字体且不自动换行, 折得更窄, 免得撑破手机屏幕
+REPORT_WRAP = 100        # 普通文本行的折行宽度(手机端会自然换行, 可以留宽些)
+REPORT_CODE_COLS = 64    # 代码块的折行宽度, 按"显示列"算: 等宽字体下 CJK 占 2 列
+REPORT_CODE_MAX_LINES = 400   # 折叠块最多保留的行数, 超出截断(全文见仓库 changes.log)
+
+
+def _disp_width(ch):
+    """字符在等宽字体下占的列数(东亚宽字符占 2 列)."""
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def _wrap_cols(line, cols=REPORT_CODE_COLS):
+    """按显示列宽折行.
+
+    只按字符数折是不够的: 一行 50 个汉字在等宽字体下相当于 100 列, 放进
+    代码块照样比手机屏宽一倍. 这里按实际列宽折, 保证渲染出来不会横向溢出.
+    """
+    line = line.rstrip()
+    if not line:
+        return [""]
+    out, cur, width = [], [], 0
+    for ch in line:
+        w = _disp_width(ch)
+        if width + w > cols and cur:
+            out.append("".join(cur))
+            cur, width = [], 0
+        cur.append(ch)
+        width += w
+    out.append("".join(cur))
+    return out
 
 
 def _wrap_long(line, width=REPORT_WRAP):
@@ -551,10 +579,16 @@ def write_report(path, reports):
                     f.write(f"…（已省略其余 {omitted} 处）\n\n")
             else:
                 f.write("（无实质内容差异）\n\n")
-            f.write("<details><summary>完整 diff（已折行）</summary>\n\n"
-                    "```diff\n")
+            block = []
             for line in diff_lines:
-                f.write("\n".join(_wrap_long(line, REPORT_CODE_WRAP)) + "\n")
+                block.extend(_wrap_cols(line))
+            truncated = len(block) > REPORT_CODE_MAX_LINES
+            if truncated:
+                block = block[:REPORT_CODE_MAX_LINES]
+            note = "（超长已截断, 全文见仓库 changes.log）" if truncated else "（已折行）"
+            f.write(f"<details><summary>完整 diff{note}</summary>\n\n"
+                    "```diff\n")
+            f.write("\n".join(block) + "\n")
             f.write("```\n\n</details>\n\n")
 
 
