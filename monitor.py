@@ -101,6 +101,24 @@ def check_page(url, title, cfg, storage):
     return _finish_change(cfg, storage, url, title, content, diff_lines)
 
 
+def _basic_mail(title, page_title, url, diff_lines, max_lines=30, width=160):
+    """build_mail 异常时的兜底摘要: 朴素纯文本, 保证通知不丢."""
+    out = [f"标题: {title}"]
+    if page_title:
+        out.append(f"页面: {page_title}")
+    out.append(f"链接: {url}")
+    out.append(f"时间: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    rows = [l for l in diff_lines if l and not l.startswith("@@")]
+    out.append("")
+    out.append(f"共 {len(rows)} 行差异（邮件排版已降级）:")
+    for line in rows[:max_lines]:
+        line = line.rstrip()
+        out.append(line if len(line) <= width else line[:width] + "…")
+    if len(rows) > max_lines:
+        out.append(f"…（其余 {len(rows) - max_lines} 行见 changes.log）")
+    return "\n".join(out)
+
+
 def _finish_change(cfg, storage, url, title, content, diff_lines):
     """变化已确认: 打快照、记日志、发通知, 返回报告元组."""
     page_title = _page_title(content)
@@ -112,7 +130,13 @@ def _finish_change(cfg, storage, url, title, content, diff_lines):
     for line in diff_lines:
         log.info("%s", line)
     notify.send_webhook(cfg.get("notify", {}), f"网页变化: {title}", url)
-    mail_text, mail_html = build_mail(title, page_title, url, diff_lines)
+    try:
+        mail_text, mail_html = build_mail(title, page_title, url, diff_lines)
+    except Exception:
+        # 邮件排版只是展示层: 此时基线已落盘, 若让它把整轮打挂,
+        # 这次变化就永远不会再被检测到 —— 宁可降级成朴素摘要.
+        log.exception("邮件正文生成失败, 降级为精简摘要")
+        mail_text, mail_html = _basic_mail(title, page_title, url, diff_lines), None
     notify.send_email(cfg.get("notify", {}), f"网页变化: {title}",
                       mail_text, mail_html)
     write_changelog(cfg, url, title, page_title, diff_lines, snapshot)
@@ -210,9 +234,11 @@ def _sentence_spans(old, new, base):
             None, o_parts, n_parts).get_opcodes():
         if tag == "equal":
             continue
-        i1c = base + o_offs[i1]
+        # opcode 的起点/终点都可能落在段序列末尾之外(整段追加或删除),
+        # 一律按文本长度兜底, 否则列表越界会把整轮监控打挂.
+        i1c = base + (o_offs[i1] if i1 < len(o_offs) else len(old))
         i2c = base + (o_offs[i2] if i2 < len(o_offs) else len(old))
-        j1c = base + n_offs[j1]
+        j1c = base + (n_offs[j1] if j1 < len(n_offs) else len(new))
         j2c = base + (n_offs[j2] if j2 < len(n_offs) else len(new))
         if (i2c - i1c) + (j2c - j1c) <= INLINE_DIFF_MAX:
             spans.extend(_char_spans(old[i1c - base:i2c - base],
@@ -428,8 +454,14 @@ def write_changelog(cfg, url, title, page_title, diff_lines, snapshot):
 
 
 def run_once(cfg, storage, report_file=None):
+    """跑完所有目标, 返回处理异常的页面数.
+
+    单个页面出意外只记日志并跳过, 不中断整轮: 否则后面的目标全都不看,
+    本轮已保存的基线还会让出问题的这次变化再也通知不到.
+    """
     changes = 0
     seen = 0
+    failed = 0
     reports = []
     for target in cfg.get("targets", []):
         url = target["url"]
@@ -444,13 +476,23 @@ def run_once(cfg, storage, report_file=None):
             seen += len(pages)
             log.info("从 sitemap 发现 %d 个页面: %s", len(pages), title)
             for page in sorted(pages):
-                r = check_page(page, f"{title} :: {page}", cfg, storage)
+                try:
+                    r = check_page(page, f"{title} :: {page}", cfg, storage)
+                except Exception:
+                    failed += 1
+                    log.exception("页面处理异常, 已跳过: %s", page)
+                    continue
                 if r:
                     changes += 1
                     reports.append(r)
         else:
             seen += 1
-            r = check_page(url, title, cfg, storage)
+            try:
+                r = check_page(url, title, cfg, storage)
+            except Exception:
+                failed += 1
+                log.exception("目标处理异常, 已跳过: %s", title)
+                continue
             if r:
                 changes += 1
                 reports.append(r)
@@ -460,6 +502,9 @@ def run_once(cfg, storage, report_file=None):
             write_report(report_file, reports)
     else:
         log.info("本轮完成: 无变化 (监控 %d 个页面)", seen)
+    if failed:
+        log.error("本轮有 %d 个页面处理异常, 详见上方日志", failed)
+    return failed
 
 
 def write_report(path, reports):
@@ -497,7 +542,11 @@ def main():
                       cfg.get("snapshot_dir", "snapshots"))
 
     if args.once:
-        run_once(cfg, storage, report_file=args.report_file)
+        failed = run_once(cfg, storage, report_file=args.report_file)
+        if failed:
+            # 仍以非 0 退出以便 Actions 发出失败通知; 其余页面已正常处理,
+            # 状态由后续 if: always() 的步骤照常提交.
+            raise SystemExit(1)
         return
 
     interval = cfg.get("interval_seconds", 600)

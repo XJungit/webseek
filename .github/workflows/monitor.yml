@@ -74,14 +74,19 @@ jobs:
         run: |
           git config user.name "webseek-bot"
           git config user.email "webseek-bot@users.noreply.github.com"
-          git pull --rebase origin "${GITHUB_REF_NAME}" || true   # 先同步远端, 避免非快进拒收
           for f in state.json changes.log snapshots; do
             [ -e "$f" ] && git add -f "$f"
           done
-          git diff --cached --quiet || {
-            git commit -m "chore: 更新监控状态 [skip ci] $(date -u +%F_%T)"
-            git push
-          }
+          if git diff --cached --quiet; then
+            echo "状态无变化, 无需提交"
+            exit 0
+          fi
+          git commit -m "chore: 更新监控状态 [skip ci] $(date -u +%F_%T)"
+          # 先提交再同步: 带着未暂存改动执行 pull --rebase 会直接报
+          # "cannot pull with rebase: You have unstaged changes", 一旦远端
+          # 同时前进, 这次的变化基线就推不上去了.
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git push || { git pull --rebase origin "${GITHUB_REF_NAME}"; git push; }
 
       - name: Create failure issue
         if: failure()
