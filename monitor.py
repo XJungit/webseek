@@ -507,17 +507,54 @@ def run_once(cfg, storage, report_file=None):
     return failed
 
 
+REPORT_WRAP = 100    # 报告里单行最大字符数: 超长单行会让手机端整页缩放
+
+
+def _wrap_long(line, width=REPORT_WRAP):
+    """把超长行硬折成多行.
+
+    正文经归一化后常是上万字的单行, 直接写进 Issue 会被 GitHub 原样塞进
+    通知邮件: 邮件宽度被撑到屏幕的好几倍, 客户端只能整页缩小, 手机上就是
+    "一片空白 + 字小到看不见". 折行后任何一行都不会超过 width.
+    """
+    line = line.rstrip()
+    if len(line) <= width:
+        return [line]
+    return [line[i:i + width] for i in range(0, len(line), width)]
+
+
 def write_report(path, reports):
-    """写入 GitHub Actions 通知报告 (markdown). 云端不存快照, 故不含快照链接."""
+    """写入 GitHub Actions 通知报告 (markdown). 云端不存快照, 故不含快照链接.
+
+    这份报告会作为 GitHub Issue 正文, 并由 GitHub 直接发进通知邮件, 所以
+    排版按"手机可读"来做: 先给变化点+就近上下文(与邮件一致), 完整 diff 折行
+    后收进折叠块.
+    """
     with open(path, "w", encoding="utf-8") as f:
-        for title, page_title, url, diff_lines, snapshot in reports:
-            f.write(f"## {title}\n")
+        for title, page_title, url, diff_lines, _snapshot in reports:
+            f.write(f"## {title}\n\n")
             if page_title:
-                f.write(f"页面: {page_title}\n")
-            f.write(f"URL: {url}\n")
-            f.write("```diff\n")
-            f.write("\n".join(diff_lines) + "\n")
-            f.write("```\n\n")
+                f.write(f"页面: {page_title}\n\n")
+            f.write(f"URL: {url}\n\n")
+            frags, folded = _diff_fragments(diff_lines)
+            if frags:
+                shown = frags[:MAIL_MAX_FRAGS]
+                f.write(f"共 {len(frags) + folded} 处变化"
+                        "（「旧」→「新」为改动处）:\n\n")
+                for i, frag in enumerate(shown, 1):
+                    for line in _wrap_long(f"{i}. {_frag_text(frag)}"):
+                        f.write(line + "\n")
+                    f.write("\n")
+                omitted = len(frags) + folded - len(shown)
+                if omitted:
+                    f.write(f"…（已省略其余 {omitted} 处）\n\n")
+            else:
+                f.write("（无实质内容差异）\n\n")
+            f.write("<details><summary>完整 diff（已折行）</summary>\n\n"
+                    "```diff\n")
+            for line in diff_lines:
+                f.write("\n".join(_wrap_long(line)) + "\n")
+            f.write("```\n\n</details>\n\n")
 
 
 def main():
