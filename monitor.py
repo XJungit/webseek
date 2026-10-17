@@ -128,66 +128,229 @@ _LEGACY_STABLE_RE = re.compile(
 )
 
 
-MAIL_MAX_LINES = 30    # 邮件正文最多展示的 diff 行数, 超出截断并提示去 Issue 看全文
-MAIL_MAX_WIDTH = 160   # 邮件中每行最多字符, 超长截断 (DATA 单行常达数千字)
+# 页面正文经 extract_content 归一化后常是数千字的超长单行, 若按行从头截断, 被剪掉的
+# 往往正是变化处 —— 邮件里两行看起来一模一样, 完全看不出改了什么. 因此邮件改为
+# "字符级变化点 + 就近上下文" 展示; 完整 diff 仍保留在 GitHub Issue / changes.log.
+MAIL_MAX_FRAGS = 15      # 邮件里最多展示多少处变化
+INLINE_CTX = 40          # 每处变化前后保留的上下文字符数
+INLINE_MERGE = 10        # 相邻变化点间距小于该值时合并为同一处
+INLINE_MAX_FRAGS = 4     # 单个 -(旧)/+(新) 行对内最多展示的变化点
+INLINE_DIFF_MAX = 3000   # 行内差异区的字符上限, 超过则整段作为一处变化(防卡顿)
+SEG_MAX = 120            # 单个变化片段最多展示的字符数
 
 
-def _clip_line(line, width=MAIL_MAX_WIDTH):
-    line = (line or "").rstrip()
-    return line if len(line) <= width else line[:width] + "…"
+def _prefix_tail(text, width=INLINE_CTX):
+    """变化点之前的上下文: 保留紧邻的尾部字符, 左侧省略."""
+    text = (text or "").strip()
+    return text if len(text) <= width else "…" + text[-width:]
+
+
+def _suffix_head(text, width=INLINE_CTX):
+    """变化点之后的上下文: 保留紧邻的头部字符, 右侧省略."""
+    text = (text or "").strip()
+    return text if len(text) <= width else text[:width] + "…"
+
+
+def _clip_seg(seg):
+    """单个变化片段过长时截断, 并标注原始长度."""
+    seg = seg or ""
+    if len(seg) <= SEG_MAX:
+        return seg
+    return f"{seg[:SEG_MAX]}…(共 {len(seg)} 字)"
+
+
+def _common_edges(old, new):
+    """公共前缀长度与公共后缀长度(两者不重叠), 用于快速定位差异区."""
+    n = min(len(old), len(new))
+    pre = 0
+    while pre < n and old[pre] == new[pre]:
+        pre += 1
+    suf = 0
+    while (suf < n - pre
+           and old[len(old) - 1 - suf] == new[len(new) - 1 - suf]):
+        suf += 1
+    return pre, suf
+
+
+def _frags_for_pair(old, new):
+    """对一对 -(旧)/+(新) 行做字符级 diff, 返回变化点列表.
+
+    先用公共前后缀切出差异区(超长正文也能秒级完成), 再在差异区内做字符级
+    比对, 从而精确定位"改了哪几个字", 而不是把整行从头截断了事.
+    """
+    if (not old and not new) or old == new:
+        return []
+    pre, suf = _common_edges(old, new)
+    old_mid = old[pre:len(old) - suf]
+    new_mid = new[pre:len(new) - suf]
+
+    if len(old_mid) + len(new_mid) <= INLINE_DIFF_MAX:
+        spans = [(pre + i1, pre + i2, pre + j1, pre + j2)
+                 for tag, i1, i2, j1, j2
+                 in difflib.SequenceMatcher(None, old_mid, new_mid).get_opcodes()
+                 if tag != "equal"]
+        merged = []
+        for i1, i2, j1, j2 in spans:
+            if (merged and i1 - merged[-1][1] <= INLINE_MERGE
+                    and j1 - merged[-1][3] <= INLINE_MERGE):
+                merged[-1] = (merged[-1][0], i2, merged[-1][2], j2)
+            else:
+                merged.append((i1, i2, j1, j2))
+    else:
+        merged = [(pre, len(old) - suf, pre, len(new) - suf)]
+
+    frags = []
+    for i1, i2, j1, j2 in merged:
+        suffix_src = old[i2:] if i2 < len(old) else new[j2:]
+        frags.append({
+            "old": old[i1:i2],
+            "new": new[j1:j2],
+            "prefix": _prefix_tail(old[max(0, i1 - INLINE_CTX):i1]),
+            "suffix": _suffix_head(suffix_src),
+        })
+    return frags
+
+
+def _diff_fragments(diff_lines):
+    """把 unified diff 解析成字符级变化点, 返回 (变化点列表, 被折叠的数量).
+
+    丢弃 ---/+++ 文件头与 @@ 行(它们不是内容差异, 之前在邮件里被当成
+    删除/新增行显示); 连续的 -(旧)/+(新) 行按顺序配对后做行内比对.
+    """
+    frags, extra = [], 0
+    dels, adds = [], []
+
+    def flush():
+        nonlocal dels, adds, extra
+        for i in range(max(len(dels), len(adds))):
+            old = dels[i][1:] if i < len(dels) else ""
+            new = adds[i][1:] if i < len(adds) else ""
+            pair = _frags_for_pair(old, new)
+            frags.extend(pair[:INLINE_MAX_FRAGS])
+            extra += max(0, len(pair) - INLINE_MAX_FRAGS)
+        dels, adds = [], []
+
+    for line in diff_lines:
+        if (not line or line.startswith("@@")
+                or line.startswith("--- ") or line.startswith("+++ ")):
+            continue
+        if line.startswith("-"):
+            if adds:
+                flush()
+            dels.append(line)
+        elif line.startswith("+"):
+            adds.append(line)
+        else:
+            flush()
+    flush()
+    return frags, extra
+
+
+# 拼接上下文与变化标记时, 紧邻标点则不再补空格, 读起来更接近原文
+_NO_SPACE_AFTER = "。，、；：！？）》」』】…,.;:!?)]}"
+_NO_SPACE_BEFORE = "（《「『【([{"
+
+
+def _join_ctx(parts):
+    out = ""
+    for part in parts:
+        if not part:
+            continue
+        if out and out[-1] not in _NO_SPACE_AFTER and part[0] not in _NO_SPACE_BEFORE:
+            out += " "
+        out += part
+    return out
+
+
+def _frag_text(frag):
+    """纯文本版的一处变化: 上下文 + 「旧」→「新」."""
+    old, new = _clip_seg(frag["old"]), _clip_seg(frag["new"])
+    if old and new:
+        mid = f"「{old}」→「{new}」"
+    elif old:
+        mid = f"删除「{old}」"
+    else:
+        mid = f"新增「{new}」"
+    return _join_ctx([frag["prefix"], mid, frag["suffix"]])
+
+
+def _frag_html(esc, frag):
+    """HTML 版的一处变化; 全部用行内样式, 避免邮件客户端丢弃 <style>."""
+    ctx = "color:#57606a"
+    del_box = ("background:#ffeef0;color:#82071e;padding:1px 3px;"
+               "border-radius:3px;margin:0 2px")
+    add_box = ("background:#e6ffed;color:#0a3622;padding:1px 3px;"
+               "border-radius:3px;margin:0 2px")
+    old, new = _clip_seg(frag["old"]), _clip_seg(frag["new"])
+    if old and new:
+        body = (f'<span style="{del_box}">{esc(old)}</span>'
+                '<span style="color:#57606a;margin:0 4px">→</span>'
+                f'<span style="{add_box}">{esc(new)}</span>')
+    elif old:
+        body = (f'<span style="{ctx};margin-right:4px">删除</span>'
+                f'<span style="{del_box}">{esc(old)}</span>')
+    else:
+        body = (f'<span style="{ctx};margin-right:4px">新增</span>'
+                f'<span style="{add_box}">{esc(new)}</span>')
+    return ('<div style="margin:6px 0;padding:6px 8px;background:#f6f8fa;'
+            'border-radius:6px;white-space:pre-wrap;word-break:break-word;'
+            'line-height:1.7">'
+            f'<span style="{ctx}">{esc(frag["prefix"])}</span>{body}'
+            f'<span style="{ctx}">{esc(frag["suffix"])}</span></div>')
 
 
 def build_mail(title, page_title, url, diff_lines):
     """组装邮件正文, 返回 (纯文本版, HTML 版).
 
-    只展示稳定部分的 diff, 每行截断、总行数封顶, 避免手机邮箱里出现
-    一屏都划不完的超长单行; 全文仍保留在 GitHub Issue / changes.log.
+    只展示"改了什么": 对每对 -(旧)/+(新) 行做字符级 diff, 保留变化片段与就近
+    上下文, 因此超长正文也能一眼看出改动; 变化点数量与单点长度均封顶, 避免
+    内容多时糊成一片. 完整 diff 仍保留在 GitHub Issue / changes.log.
     """
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    frags, folded = _diff_fragments(diff_lines)
+    shown = frags[:MAIL_MAX_FRAGS]
+    omitted = len(frags) - len(shown) + folded
+
     head = [f"标题: {title}"]
     if page_title:
         head.append(f"页面: {page_title}")
     head.append(f"链接: {url}")
     head.append(f"时间: {ts}")
 
-    usable = [l for l in diff_lines if l and not l.startswith("@@")]
-    shown = usable[:MAIL_MAX_LINES]
-    omitted = len(usable) - len(shown)
-
     text = list(head) + [""]
-    if not usable:
+    if not frags:
         text.append("（无实质内容差异）")
     else:
-        text.append("变化详情:")
-        text.extend(_clip_line(l) for l in shown)
+        text.append(f"共 {len(frags) + folded} 处变化（「旧」→「新」为改动处）:")
+        for i, f in enumerate(shown, 1):
+            text.append(f"  {i}. {_frag_text(f)}")
         if omitted:
-            text.append(f"…（已省略其余 {omitted} 行，完整 diff 见 GitHub Issue / changes.log）")
+            text.append(f"  …（已省略其余 {omitted} 处）")
+        text.append("完整 diff 见 GitHub Issue / changes.log")
 
     import html as _html
-    rows = []
-    for l in shown:
-        cls = "add" if l.startswith("+") else "del" if l.startswith("-") else "ctx"
-        rows.append(f'<div class="{cls}">{_html.escape(_clip_line(l))}</div>')
+    esc = _html.escape
+    rows = [_frag_html(esc, f) for f in shown]
     if omitted:
-        rows.append(f'<div class="more">… 已省略其余 {omitted} 行，'
-                    "完整 diff 见 GitHub Issue / changes.log</div>")
+        rows.append('<div style="color:#57606a;margin-top:6px">… 已省略其余 '
+                    f"{omitted} 处，完整 diff 见 GitHub Issue / changes.log</div>")
     if not rows:
-        rows.append('<div class="more">（无实质内容差异）</div>')
+        rows.append('<div style="color:#57606a">（无实质内容差异）</div>')
+    detail_head = ("<p><b>变化详情:</b>"
+                   + (f"共 {len(frags) + folded} 处"
+                      "（「旧」→「新」为改动处）</p>" if frags else "</p>"))
     html_body = (
         '<html><body style="font-family:-apple-system,Segoe UI,Roboto,'
         'PingFang SC,Microsoft YaHei,sans-serif;font-size:14px;color:#24292f">'
-        f"<p><b>标题:</b> {_html.escape(title)}<br>"
-        + (f"<b>页面:</b> {_html.escape(page_title)}<br>" if page_title else "")
-        + f'<b>链接:</b> <a href="{_html.escape(url)}">{_html.escape(url)}</a><br>'
-        + f"<b>时间:</b> {_html.escape(ts)}</p>"
-        + '<p><b>变化详情:</b></p>'
-        + '<div style="font-family:Consolas,Menlo,monospace;font-size:13px">'
-        + "".join(rows) + "</div>"
-        + "<style>.add{background:#e6ffed;white-space:pre-wrap;word-break:break-all}"
-        ".del{background:#ffeef0;white-space:pre-wrap;word-break:break-all}"
-        ".ctx{white-space:pre-wrap;word-break:break-all}"
-        ".more{color:#57606a;margin-top:6px}</style>"
-        "</body></html>"
+        f"<p><b>标题:</b> {esc(title)}<br>"
+        + (f"<b>页面:</b> {esc(page_title)}<br>" if page_title else "")
+        + f'<b>链接:</b> <a href="{esc(url)}">{esc(url)}</a><br>'
+        + f"<b>时间:</b> {esc(ts)}</p>"
+        + detail_head
+        + "".join(rows)
+        + '<div style="color:#57606a;font-size:12px;margin-top:8px">'
+          "完整 diff 见 GitHub Issue / changes.log</div>"
+        + "</body></html>"
     )
     return "\n".join(text), html_body
 
