@@ -507,7 +507,8 @@ def run_once(cfg, storage, report_file=None):
     return failed
 
 
-REPORT_WRAP = 100    # 报告里单行最大字符数: 超长单行会让手机端整页缩放
+REPORT_WRAP = 100       # 报告里普通文本行的折行宽度(手机端会自然换行, 留宽些)
+REPORT_CODE_WRAP = 50   # 代码块是等宽字体且不自动换行, 折得更窄, 免得撑破手机屏幕
 
 
 def _wrap_long(line, width=REPORT_WRAP):
@@ -553,7 +554,7 @@ def write_report(path, reports):
             f.write("<details><summary>完整 diff（已折行）</summary>\n\n"
                     "```diff\n")
             for line in diff_lines:
-                f.write("\n".join(_wrap_long(line)) + "\n")
+                f.write("\n".join(_wrap_long(line, REPORT_CODE_WRAP)) + "\n")
             f.write("```\n\n</details>\n\n")
 
 
