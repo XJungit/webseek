@@ -172,11 +172,62 @@ def _common_edges(old, new):
     return pre, suf
 
 
-def _frags_for_pair(old, new):
-    """对一对 -(旧)/+(新) 行做字符级 diff, 返回变化点列表.
+def _char_spans(old, new, base_i, base_j):
+    """在 old/new 上做字符级比对, 返回整行坐标下的差异区间列表."""
+    return [(base_i + i1, base_i + i2, base_j + j1, base_j + j2)
+            for tag, i1, i2, j1, j2
+            in difflib.SequenceMatcher(None, old, new).get_opcodes()
+            if tag != "equal"]
 
-    先用公共前后缀切出差异区(超长正文也能秒级完成), 再在差异区内做字符级
-    比对, 从而精确定位"改了哪几个字", 而不是把整行从头截断了事.
+
+# 句子边界: 中文句末标点直接切; 英文句点仅在其后是空白时切(避免切碎 URL/缩写)
+_SENT_END = re.compile(r"[。！？；!?;]+|\.(?=\s)")
+
+
+def _split_sentences(text):
+    """按句末标点切段, 返回 (段列表, 每段起始偏移)."""
+    parts, offs, pos = [], [], 0
+    for m in _SENT_END.finditer(text):
+        parts.append(text[pos:m.end()])
+        offs.append(pos)
+        pos = m.end()
+    if pos < len(text):
+        parts.append(text[pos:])
+        offs.append(pos)
+    return parts, offs
+
+
+def _sentence_spans(old, new, base):
+    """差异区过大时按句子对齐(序列长度小, 很快), 组内能精修就再精修一次.
+
+    整页被改写时逐字比对既慢又不可读; 按句子对齐后, "改了哪几句"能逐处列出,
+    组内体量不大时再落到具体字词.
+    """
+    o_parts, o_offs = _split_sentences(old)
+    n_parts, n_offs = _split_sentences(new)
+    spans = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+            None, o_parts, n_parts).get_opcodes():
+        if tag == "equal":
+            continue
+        i1c = base + o_offs[i1]
+        i2c = base + (o_offs[i2] if i2 < len(o_offs) else len(old))
+        j1c = base + n_offs[j1]
+        j2c = base + (n_offs[j2] if j2 < len(n_offs) else len(new))
+        if (i2c - i1c) + (j2c - j1c) <= INLINE_DIFF_MAX:
+            spans.extend(_char_spans(old[i1c - base:i2c - base],
+                                     new[j1c - base:j2c - base], i1c, j1c))
+        else:
+            spans.append((i1c, i2c, j1c, j2c))
+    return spans
+
+
+def _frags_for_pair(old, new):
+    """对一对 -(旧)/+(新) 行做行内 diff, 返回变化点列表.
+
+    先剥掉公共前后缀把差异区缩到最小(超长正文也能秒级完成); 差异区不大时直接
+    字符级比对, 精确定位"改了哪几个字"; 差异区很大(整段改写)则退到句子级对齐,
+    逐处列出改动, 而不是把整行从头截断了事.
     """
     if (not old and not new) or old == new:
         return []
@@ -185,19 +236,17 @@ def _frags_for_pair(old, new):
     new_mid = new[pre:len(new) - suf]
 
     if len(old_mid) + len(new_mid) <= INLINE_DIFF_MAX:
-        spans = [(pre + i1, pre + i2, pre + j1, pre + j2)
-                 for tag, i1, i2, j1, j2
-                 in difflib.SequenceMatcher(None, old_mid, new_mid).get_opcodes()
-                 if tag != "equal"]
-        merged = []
-        for i1, i2, j1, j2 in spans:
-            if (merged and i1 - merged[-1][1] <= INLINE_MERGE
-                    and j1 - merged[-1][3] <= INLINE_MERGE):
-                merged[-1] = (merged[-1][0], i2, merged[-1][2], j2)
-            else:
-                merged.append((i1, i2, j1, j2))
+        spans = _char_spans(old_mid, new_mid, pre, pre)
     else:
-        merged = [(pre, len(old) - suf, pre, len(new) - suf)]
+        spans = _sentence_spans(old_mid, new_mid, pre)
+
+    merged = []
+    for i1, i2, j1, j2 in spans:
+        if (merged and i1 - merged[-1][1] <= INLINE_MERGE
+                and j1 - merged[-1][3] <= INLINE_MERGE):
+            merged[-1] = (merged[-1][0], i2, merged[-1][2], j2)
+        else:
+            merged.append((i1, i2, j1, j2))
 
     frags = []
     for i1, i2, j1, j2 in merged:
